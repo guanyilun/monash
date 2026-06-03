@@ -77,10 +77,14 @@ rich return lives in the Scheme heap, never stringified mid-flight:
 ```ts
 {
   name: string;          // the Scheme identifier, e.g. "db-query"
-  signature?: string;    // shown to the model + in (help)
   doc?: string;          // one-line description
   fn: (...args) => any;  // your implementation (sync or async)
+  signature?: string;    // shown to the model + in (help); auto-generated if you declare args/opts
   raw?: boolean;         // opt out of marshalling (see below)
+  // Declarative interface (see "Keyword arguments") — enables auto-parse + signature generation:
+  args?: Array<string | { name; type? }>;          // positional params
+  opts?: Record<string, Type | { type?; default? }>;  // keyword options; Type = "string" | "number" | "boolean" | "any"
+  returns?: string;      // return-type blurb for the generated signature
 }
 ```
 
@@ -101,29 +105,54 @@ then `fn` receives the raw LIPS arguments and must return a raw LIPS value.
 
 ## Keyword arguments
 
-A bare `:keyword` in the source evaluates to the symbol `:keyword` (monash binds
-it self-quoting), so the model can call your primitive with options after the
-positional args:
+The model calls a primitive with options after the positionals — a bare
+`:keyword` self-evaluates, so this just works at the call site:
 
 ```scheme
 (my-search "query" :limit 5 :sort-by "date")
 ```
 
-`fn` then receives the keyword symbols and their values interleaved in `rest` —
-fold them into an options object yourself:
+**Declarative (recommended).** Declare `args` and `opts`; monash splits
+positionals from keywords, coerces each option to its type, applies defaults,
+rejects unknown options, and **generates the `signature`** so it can't drift
+from the implementation. `fn` receives `(...positionals, opts)`:
 
 ```ts
-fn: (query, ...rest) => {
-  const opts = {};
-  for (let i = 0; i < rest.length - 1; i += 2) {
-    opts[String(rest[i]).replace(/^:/, "")] = rest[i + 1];
-  }
-  // opts → { limit: 5, "sort-by": "date" }
+{
+  name: "my-search",
+  doc: "Search things.",
+  args: ["query"],
+  opts: {
+    limit:     { type: "number", default: 10 },
+    "sort-by": { type: "string", default: "relevance" },
+    refereed:  "boolean",   // shorthand for { type: "boolean" }
+  },
+  returns: "(listof alist)",
+  fn: (query, opts) => {
+    // opts → { limit: 10, "sort-by": "relevance", refereed?: true }
+    // already colon-stripped, coerced, and defaulted
+  },
 }
 ```
 
-Advertise each option in the `signature` with the `[:key type]` convention so
-the model knows it exists, e.g. `(my-search "query" [:limit n] [:sort-by str])`.
+Option keys keep their Scheme spelling, so read `opts["sort-by"]`. Omitted
+positionals arrive as `null`, so `opts` always lands at the same parameter slot.
+The generated signature above is
+`(my-search "query" [:limit n] [:sort-by str] [:refereed bool]) → (listof alist)`.
+
+**Manual.** For variadic or hand-rolled primitives, skip `args`/`opts` and fold
+the keyword tail yourself with the `kwargs` helper:
+
+```ts
+import { kwargs } from "monash/scheme";
+
+fn: (query, ...rest) => {
+  const { limit = 10, "sort-by": sort = "date" } = kwargs(rest);
+}
+```
+
+Either way, every keyword needs a value — there are no bare flags; pass
+`:refereed #t`, not a lone `:refereed`.
 
 ## Loading & resolution
 

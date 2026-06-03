@@ -140,12 +140,23 @@ function toSchemeList(items: unknown[]): unknown {
   return tail;
 }
 
+export type OptType = "string" | "number" | "boolean" | "any";
+export type OptSpec = { type?: OptType; default?: unknown };
+export type ArgSpec = string | { name: string; type?: OptType };
+
 export type PrimitiveSpec = {
   name: string;
   signature?: string;
   doc?: string;
   fn: (...args: any[]) => any;
   raw?: boolean;
+  /** Declarative positional params. Providing `args`/`opts` enables auto-parse
+   *  + signature generation: `fn` then receives `(...positionals, opts)`. */
+  args?: ArgSpec[];
+  /** Declarative keyword options; values arrive coerced/defaulted in `opts`. */
+  opts?: Record<string, OptType | OptSpec>;
+  /** Return-type blurb appended to the generated signature, e.g. "(listof alist)". */
+  returns?: string;
 };
 type ExtPrimitiveRegistry = Map<string, { signature?: string; doc?: string }>;
 
@@ -1491,6 +1502,77 @@ function splitArgs(
   return { positionals, opts };
 }
 
+/** Fold a primitive's trailing `:key value …` args (post-marshalling, so keys
+ *  arrive as `":key"` strings) into an options object, colons stripped. Skips
+ *  any leading positionals. The manual building block behind declarative opts. */
+export function kwargs(rest: any[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  let i = 0;
+  while (i < rest.length && !(typeof rest[i] === "string" && rest[i].startsWith(":"))) i++;
+  for (; i + 1 < rest.length; i += 2) out[String(rest[i]).replace(/^:/, "")] = rest[i + 1];
+  return out;
+}
+
+const optTypeToken = (t?: OptType): string =>
+  t === "number" ? "n" : t === "boolean" ? "bool" : t === "any" ? "val" : "str";
+
+function coerceOpt(raw: any, type?: OptType): any {
+  if (type === "number") return Number(toJsStr(raw));
+  if (type === "boolean") return unwrapSchemeBool(toJsStr(raw));
+  const v = lipsToJs(raw);
+  if (type === "string") return v == null ? v : String(v);
+  return v;
+}
+
+const normOpt = (v: OptType | OptSpec): OptSpec => (typeof v === "string" ? { type: v } : v);
+
+function generateSignature(spec: PrimitiveSpec): string {
+  const parts: string[] = [spec.name];
+  for (const a of spec.args ?? []) {
+    const as = typeof a === "string" ? { name: a } : a;
+    parts.push(as.type && as.type !== "string" ? as.name : `"${as.name}"`);
+  }
+  for (const [k, v] of Object.entries(spec.opts ?? {})) {
+    parts.push(`[:${k} ${optTypeToken(normOpt(v).type)}]`);
+  }
+  const sig = `(${parts.join(" ")})`;
+  return spec.returns ? `${sig} → ${spec.returns}` : sig;
+}
+
+// Declarative path: split positionals (up to the first keyword symbol) from the
+// `:key value` tail, coerce + default each option by its declared type, and call
+// `fn(...positionals, opts)`. Operates on raw LIPS args so a string value that
+// happens to start with ":" stays a positional (only `:`-symbols are keywords).
+function buildDeclaredCall(spec: PrimitiveSpec): (...lipsArgs: any[]) => any {
+  const fn = spec.fn;
+  const arity = (spec.args ?? []).length;
+  const optSpecs: Record<string, OptSpec> = {};
+  for (const [k, v] of Object.entries(spec.opts ?? {})) optSpecs[k] = normOpt(v);
+  const validList = Object.keys(optSpecs).map((k) => `:${k}`).join(" ");
+  return (...lipsArgs: any[]) => {
+    const positionals: any[] = [];
+    let i = 0;
+    while (i < lipsArgs.length && !isKwSym(lipsArgs[i])) { positionals.push(lipsArgs[i]); i++; }
+    const opts: Record<string, unknown> = {};
+    while (i < lipsArgs.length) {
+      if (!isKwSym(lipsArgs[i])) { i++; continue; }
+      const key = symName(lipsArgs[i])!.slice(1);
+      const os = optSpecs[key];
+      if (!os) throw new Error(`unknown option :${key}; valid options: ${validList || "(none)"}`);
+      opts[key] = coerceOpt(lipsArgs[i + 1], os.type);
+      i += 2;
+    }
+    for (const [k, os] of Object.entries(optSpecs)) {
+      if (!(k in opts) && "default" in os) opts[k] = os.default;
+    }
+    // Pad omitted positionals to null so `opts` always lands at a fixed slot.
+    const js = positionals.map(lipsToJs);
+    while (js.length < arity) js.push(null);
+    const out = fn(...js, opts);
+    return out instanceof Promise ? out.then(jsToLips) : jsToLips(out);
+  };
+}
+
 // Cache executors on globalThis (survives reload's module-cache bust): the
 // integration unregisters the built-ins, but the tool objects outlive it.
 const EXECUTOR_CACHE: Record<string, ToolExecutor> =
@@ -1843,16 +1925,20 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
   })();
 
   function definePrimitive(spec: PrimitiveSpec): void {
-    const { name, signature, doc, fn, raw } = spec ?? ({} as PrimitiveSpec);
+    const { name, doc, fn, raw } = spec ?? ({} as PrimitiveSpec);
     if (!name || typeof fn !== "function") {
       throw new Error("scheme:define-primitive: spec needs { name, fn }");
     }
-    const call = raw
-      ? fn
-      : (...lipsArgs: any[]) => {
-          const out = fn(...lipsArgs.map(lipsToJs));
-          return out instanceof Promise ? out.then(jsToLips) : jsToLips(out);
-        };
+    const declarative = !!(spec.args || spec.opts);
+    const signature = spec.signature ?? (declarative ? generateSignature(spec) : undefined);
+    const call = declarative
+      ? buildDeclaredCall(spec)
+      : raw
+        ? fn
+        : (...lipsArgs: any[]) => {
+            const out = fn(...lipsArgs.map(lipsToJs));
+            return out instanceof Promise ? out.then(jsToLips) : jsToLips(out);
+          };
     env.set(name, async (...lipsArgs: any[]) => {
       await runGuards(name, lipsArgs);
       return call(...lipsArgs);

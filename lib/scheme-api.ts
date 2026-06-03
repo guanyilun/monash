@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "agent-sh/types";
 import type { PrimitiveSpec, Guard, GuardCall } from "./scheme.ts";
 
-export type { PrimitiveSpec, Guard, GuardCall } from "./scheme.ts";
+export type { PrimitiveSpec, OptType, OptSpec, ArgSpec, Guard, GuardCall } from "./scheme.ts";
+export { kwargs } from "./scheme.ts";
 
 export interface PrimitiveInfo {
   name: string;

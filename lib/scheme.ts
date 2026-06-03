@@ -660,6 +660,32 @@ function installStdShims(env: any): void {
     return i < 0 ? false : i;
   });
 
+  // std binds string-split/string-join separator-first and string-only, the
+  // reverse of Racket; a Racket/Guile-trained model calls them string/list-first
+  // with a whitespace default, so it silently gets the wrong shape. Override to
+  // Racket order (env.set, since std already binds the names).
+  const splitSep = (sep: any): RegExp => {
+    if (sep === undefined) return /\s+/;
+    if (sep instanceof RegExp) return sep;
+    return new RegExp(String(toJsStr(sep)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  };
+  env.set("string-split", (str: any, sep?: any) => {
+    const s = toJsStr(str);
+    if (typeof s !== "string") return nil;
+    const parts = s.split(splitSep(sep));
+    while (parts.length && parts[0] === "") parts.shift();
+    while (parts.length && parts[parts.length - 1] === "") parts.pop();
+    // Box as LString so results compose with native LIPS string ops.
+    return toSchemeList(parts.map((p) => LString(p)));
+  });
+  env.set("string-join", (lst: any, sep?: any) => {
+    const parts = pairToArray(lst).map((x) => {
+      const v = toJsStr(x);
+      return typeof v === "string" ? v : String(x);
+    });
+    return LString(parts.join(sep === undefined ? " " : String(toJsStr(sep))));
+  });
+
   defineIfMissing("list-index", (pred: any, lst: any) => {
     let i = 0, cur: any = lst;
     while (cur instanceof Pair) {

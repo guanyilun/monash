@@ -104,8 +104,10 @@ const renderModel = {
       ],
       status: s.status,
       body: failed
-        ? { kind: "text", segments: [{ text: `✗ ${s.output.trim()}`, style: { color: "error" } }] }
-        : { kind: "stream", text: s.output },
+        ? { kind: "text", segments: [{ text: s.output.trim(), style: { color: "error" } }] }
+        : env.expanded
+          ? { kind: "stream", text: s.output }
+          : undefined,
       expandable: true,
       defaultExpanded: failed,
     };
@@ -173,6 +175,8 @@ export default function activate(ctx: AgentContext): void {
     displayName: "scheme",
     description: DESCRIPTION,
     maxResultBytes: 128 * 1024,
+    // side effects + shared heap → run sequentially, uncached (not the parallel batch).
+    modifiesFiles: true,
     input_schema: {
       type: "object",
       properties: {
@@ -203,18 +207,22 @@ export default function activate(ctx: AgentContext): void {
         body: { kind: "lines", lines, maxLines: 30 },
       };
     },
-    async execute(args: Record<string, unknown>) {
+    async execute(args: Record<string, unknown>, onChunk?: (chunk: string) => void) {
       const source = String(args.source ?? "");
       const timeoutMs = Math.min(Number(args.timeout_ms) || 15000, 60000);
-      if (!source.trim()) return { content: "scheme_eval: empty source", exitCode: 1, isError: true };
+      const cap = (s: string) => s.length > MAX_OUTPUT_LEN
+        ? s.slice(0, MAX_OUTPUT_LEN) + `\n... [truncated ${s.length - MAX_OUTPUT_LEN} chars]`
+        : s;
+      const finish = (content: string, isError: boolean, shown = content) => {
+        if (shown) onChunk?.(shown);
+        return { content, exitCode: isError ? 1 : 0, isError };
+      };
+      if (!source.trim()) return finish("scheme_eval: empty source", true);
       const denied = await permit(source);
-      if (denied) return { content: denied, exitCode: 1, isError: true };
+      if (denied) return finish(denied, true);
       const result = await interp.evaluate(source, timeoutMs);
-      if (!result.ok) return { content: `scheme error: ${result.error}`, exitCode: 1, isError: true };
-      const out = result.value.length > MAX_OUTPUT_LEN
-        ? result.value.slice(0, MAX_OUTPUT_LEN) + `\n... [truncated ${result.value.length - MAX_OUTPUT_LEN} chars]`
-        : result.value;
-      return { content: out, exitCode: 0, isError: false };
+      if (!result.ok) return finish(`scheme error: ${result.error}`, true);
+      return finish(cap(result.value), false, cap(result.display ?? result.value));
     },
   });
 

@@ -429,11 +429,12 @@ async function evaluate(env: any, source: string, timeoutMs: number, ctl: Timeou
     const results = await ctl.run((lips as any).exec(preprocessed, { env }), timeoutMs);
     const last = Array.isArray(results) && results.length > 0 ? results[results.length - 1] : undefined;
     const displayed = buf.join("");
-    const lastFmt = format(last);
-    const value = displayed && lastFmt
-      ? displayed + (displayed.endsWith("\n") ? "" : "\n") + lastFmt
-      : displayed || lastFmt;
-    return { ok: true as const, value };
+    const join = (a: string, b: string) => (a && b ? a + (a.endsWith("\n") ? "" : "\n") + b : a || b);
+    // value = write-style (quoted list elements) for the LLM + summary count; display = raw for the body.
+    const unwrapped = toJsStr(last);
+    const value = join(displayed, last instanceof Pair ? (last as any).toString(true) : format(last));
+    const display = join(displayed, typeof unwrapped === "string" ? unwrapped : format(last));
+    return { ok: true as const, value, display };
   } catch (e: any) {
     logErr("evaluate", e, { source: source.slice(0, 400) });
     let msg = e?.message ?? String(e);
@@ -1728,7 +1729,7 @@ export type GuardCall = { name: string; args: any[] };
 export type Guard = (call: GuardCall) => unknown;
 
 export interface Interpreter {
-  evaluate(source: string, timeoutMs: number): Promise<{ ok: boolean; value: string; error?: string }>;
+  evaluate(source: string, timeoutMs: number): Promise<{ ok: boolean; value: string; error?: string; display?: string }>;
   definePrimitive(spec: PrimitiveSpec): void;
   listPrimitives(): Array<{ name: string; signature?: string; doc?: string }>;
   addGuard(guard: Guard): () => void;

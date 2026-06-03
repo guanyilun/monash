@@ -99,6 +99,32 @@ directions, so you never touch LIPS values:
 For genuine LIPS values (a closure, lazy stream, hash-table), set `raw: true`;
 then `fn` receives the raw LIPS arguments and must return a raw LIPS value.
 
+## Keyword arguments
+
+A bare `:keyword` in the source evaluates to the symbol `:keyword` (monash binds
+it self-quoting), so the model can call your primitive with options after the
+positional args:
+
+```scheme
+(my-search "query" :limit 5 :sort-by "date")
+```
+
+`fn` then receives the keyword symbols and their values interleaved in `rest` —
+fold them into an options object yourself:
+
+```ts
+fn: (query, ...rest) => {
+  const opts = {};
+  for (let i = 0; i < rest.length - 1; i += 2) {
+    opts[String(rest[i]).replace(/^:/, "")] = rest[i + 1];
+  }
+  // opts → { limit: 5, "sort-by": "date" }
+}
+```
+
+Advertise each option in the `signature` with the `[:key type]` convention so
+the model knows it exists, e.g. `(my-search "query" [:limit n] [:sort-by str])`.
+
 ## Loading & resolution
 
 monash discovers extensions from three places, all loaded **after** monash

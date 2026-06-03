@@ -259,6 +259,36 @@ function preprocessSchemeSource(source: string): string {
   return out;
 }
 
+// LIPS has no keyword syntax, so a bare `:foo` evaluates as a variable and
+// errors. Bind every `:keyword` token in the source to a self-quoting symbol
+// before eval, so option-style args reach the primitive (built-in or extension)
+// as a symbol it can read. Tokens inside strings/comments are skipped; a stray
+// binding would be harmless anyway since `:`-names are never variables.
+function bindKeywordSymbols(env: any, source: string): void {
+  let inStr = false, inComment = false, esc = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!;
+    if (inComment) { if (c === "\n") inComment = false; continue; }
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === ";") { inComment = true; continue; }
+    if (c === '"') { inStr = true; continue; }
+    if (c === ":" && /[A-Za-z]/.test(source[i + 1] ?? "")) {
+      let j = i + 1;
+      while (j < source.length && /[\w-]/.test(source[j]!)) j++;
+      const kw = source.slice(i, j);
+      if ((env as any).get(kw, { throwError: false }) === undefined) {
+        env.set(kw, new LSymbol(kw));
+      }
+      i = j - 1;
+    }
+  }
+}
+
 function formatStringEscapeDiagnostic(source: string, baseMsg: string): string {
   const JSON_ESC = new Set(["\\", "/", '"', "b", "f", "n", "r", "t"]);
   let line = 1, col = 1;
@@ -405,6 +435,7 @@ function createTimeoutController(): TimeoutController {
 
 async function evaluate(env: any, source: string, timeoutMs: number, ctl: TimeoutController = createTimeoutController()) {
   const preprocessed = preprocessSchemeSource(source);
+  bindKeywordSymbols(env, source);
   // Capture output into the result instead of letting it vanish to console.log.
   // LIPS 1.0's native display/write resolve the *functions* from the env (the
   // stdout-port override alone misses them), so shadow each output procedure.
@@ -1501,15 +1532,6 @@ function installBindings(
   const GREP_NUMERIC = new Set([
     "context_before", "context_after", "head_limit", "offset",
   ]);
-
-  // LIPS has no keyword-argument syntax: bind each option key to a self-quoting
-  // symbol so a bare `:offset` yields the symbol instead of an unbound error.
-  for (const km of [READ_KEYMAP, BASH_KEYMAP, EDIT_KEYMAP, GLOB_KEYMAP, GREP_KEYMAP]) {
-    for (const key of Object.keys(km)) {
-      const kw = `:${key}`;
-      env.set(kw, new LSymbol(kw));
-    }
-  }
 
   const runBash = async (command: string, timeoutSec?: number) => {
     const args: Record<string, unknown> = { command: toJsStr(command) };

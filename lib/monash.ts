@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { AgentContext } from "agent-sh/types";
-import { createInterpreter, DESCRIPTION, MAX_OUTPUT_LEN, summarizeResult, type PrimitiveSpec, type Guard } from "./scheme.ts";
+import { createInterpreter, DESCRIPTION, MAX_OUTPUT_LEN, summarizeResult, type PrimitiveSpec, type LibrarySpec, type Guard } from "./scheme.ts";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 function docsGuide(): string {
@@ -149,7 +149,9 @@ export default function activate(ctx: AgentContext): void {
   }
 
   ctx.define("scheme:define-primitive", (spec: PrimitiveSpec) => interp.definePrimitive(spec));
+  ctx.define("scheme:define-library", (spec: LibrarySpec) => interp.defineLibrary(spec));
   ctx.define("scheme:list-primitives", () => interp.listPrimitives());
+  ctx.define("scheme:list-libraries", () => interp.listLibraries());
   ctx.define("scheme:guard", (guard: Guard) => interp.addGuard(guard));
 
   for (const name of KERNEL_TOOLS) {
@@ -241,12 +243,15 @@ export default function activate(ctx: AgentContext): void {
   const guide = docsGuide();
   ctx.advise("system-prompt:build", () => {
     const parts = [IDENTITY, ENVIRONMENT, BASE_INSTRUCTION];
-    const prims = interp.listPrimitives();
-    if (prims.length > 0) {
-      const catalog = prims
-        .map((p) => `  ${p.signature ?? `(${p.name} …)`}${p.doc ? `  — ${p.doc}` : ""}`)
-        .join("\n");
-      parts.push(`## Extension primitives\nLoaded extensions added these; call them like any built-in.\n${catalog}`);
+    const libs = interp.listLibraries();
+    if (libs.length > 0) {
+      const catalog = libs.map((l) => `  ${l.name}${l.description ? ` — ${l.description}` : ""}`).join("\n");
+      parts.push(
+        "## Primitive libraries\n" +
+        "Extensions grouped these; their primitives are callable now. " +
+        '`(load-library "name")` shows a library\'s signatures, `(libraries)` lists them as data.\n' +
+        catalog,
+      );
     }
     if (guide) parts.push(guide);
     return parts.join("\n\n");

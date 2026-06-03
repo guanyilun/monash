@@ -8,7 +8,12 @@
 // fails. .mts is unambiguously ESM wherever it lands.
 
 export default function activate(ctx: any): void {
-  ctx.call("scheme:define-primitive", {
+  const http = ctx.call("scheme:define-library", {
+    name: "http",
+    description: "Fetch URLs and parse JSON.",
+  });
+
+  http.definePrimitive({
     name: "http-get",
     signature: '(http-get "url") → ((status . n) (body . str))',
     doc: "HTTP GET a URL; returns the status code and response body",
@@ -18,7 +23,7 @@ export default function activate(ctx: any): void {
     },
   });
 
-  ctx.call("scheme:define-primitive", {
+  http.definePrimitive({
     name: "json",
     signature: '(json "text") → value',
     doc: "parse a JSON string into Scheme values (objects → alists, arrays → lists)",

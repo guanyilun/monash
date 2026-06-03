@@ -174,8 +174,26 @@ export type PrimitiveSpec = {
   opts?: Record<string, OptType | OptSpec>;
   /** Return-type blurb appended to the generated signature, e.g. "(listof alist)". */
   returns?: string;
+  /** Library this primitive belongs to (set automatically by `defineLibrary`). */
+  library?: string;
 };
-type ExtPrimitiveRegistry = Map<string, { signature?: string; doc?: string }>;
+
+export type LibrarySpec = {
+  name: string;
+  /** One-liner shown always in the system prompt catalog. */
+  description: string;
+  /** Optional longer instructions, surfaced only on `(load-library name)`. */
+  doc?: string;
+};
+export type LibraryInfo = { name: string; description: string; count: number };
+/** Handle returned by `defineLibrary`; define a library's primitives through it. */
+export interface Library {
+  name: string;
+  definePrimitive(spec: PrimitiveSpec): void;
+}
+type ExtPrimitiveRegistry = Map<string, { signature?: string; doc?: string; library: string }>;
+type LibraryRegistry = Map<string, { description: string; doc?: string; primitives: string[] }>;
+const MISC_LIBRARY = "misc";
 
 function lipsToJs(v: any): any {
   if (v === nil) return [];
@@ -1878,13 +1896,17 @@ export type Guard = (call: GuardCall) => unknown;
 export interface Interpreter {
   evaluate(source: string, timeoutMs: number): Promise<{ ok: boolean; value: string; error?: string; display?: string }>;
   definePrimitive(spec: PrimitiveSpec): void;
+  defineLibrary(spec: LibrarySpec): Library;
   listPrimitives(): Array<{ name: string; signature?: string; doc?: string }>;
+  listLibraries(): LibraryInfo[];
   addGuard(guard: Guard): () => void;
 }
 
 export function createInterpreter(ctx: AgentContext): Interpreter {
   const env = (lips as any).env.inherit("scheme-ext");
   const extPrims: ExtPrimitiveRegistry = new Map();
+  const libraries: LibraryRegistry = new Map();
+  const loaded = new Set<string>();
   const guards: Guard[] = [];
   const timeoutCtl = createTimeoutController();
   const runGuards = async (name: string, args: any[]): Promise<void> => {
@@ -1941,11 +1963,21 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
     }
   })();
 
+  const ensureLibrary = (name: string): { description: string; doc?: string; primitives: string[] } => {
+    let lib = libraries.get(name);
+    if (!lib) {
+      lib = { description: name === MISC_LIBRARY ? "Ungrouped primitives." : "", primitives: [] };
+      libraries.set(name, lib);
+    }
+    return lib;
+  };
+
   function definePrimitive(spec: PrimitiveSpec): void {
     const { name, doc, fn, raw } = spec ?? ({} as PrimitiveSpec);
     if (!name || typeof fn !== "function") {
       throw new Error("scheme:define-primitive: spec needs { name, fn }");
     }
+    const library = spec.library ?? MISC_LIBRARY;
     const declarative = !!(spec.args || spec.opts);
     const signature = spec.signature ?? (declarative ? generateSignature(spec) : undefined);
     const call = declarative
@@ -1960,8 +1992,46 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
       await runGuards(name, lipsArgs);
       return call(...lipsArgs);
     });
-    extPrims.set(name, { signature, doc });
+    extPrims.set(name, { signature, doc, library });
+    const lib = ensureLibrary(library);
+    if (!lib.primitives.includes(name)) lib.primitives.push(name);
   }
+
+  function defineLibrary(spec: LibrarySpec): Library {
+    const name = String(spec.name);
+    // Upsert + reset the primitive list, so a reload rebuilds the library cleanly.
+    libraries.set(name, {
+      description: String(spec.description ?? ""),
+      doc: spec.doc ? String(spec.doc) : undefined,
+      primitives: [],
+    });
+    return { name, definePrimitive: (pspec) => definePrimitive({ ...pspec, library: name }) };
+  }
+
+  // Capability discovery — the agent's metacognition layer: the prompt carries
+  // only one-line descriptions; the agent pulls a library's full docs in on demand.
+  env.set("libraries", () => toSchemeList(
+    [...libraries].map(([name, l]) => alist([
+      ["name", name],
+      ["description", l.description],
+      ["count", l.primitives.length],
+      ["loaded", loaded.has(name)],
+    ])),
+  ));
+  env.set("load-library", (name?: any) => {
+    const key = String(name instanceof LSymbol ? symName(name) : toJsStr(name) ?? "").replace(/^:/, "");
+    const lib = libraries.get(key);
+    if (!lib) return `no library named ${key}; (libraries) lists them`;
+    loaded.add(key);
+    const sigs = lib.primitives.map((pn) => {
+      const m = extPrims.get(pn);
+      const sig = m?.signature ?? `(${pn} …)`;
+      return m?.doc ? `${sig}\n    ${m.doc}` : sig;
+    }).join("\n");
+    const header = `## ${key}${lib.description ? ` — ${lib.description}` : ""}`;
+    const body = sigs || "(no primitives)";
+    return lib.doc ? `${header}\n${lib.doc}\n\n${body}` : `${header}\n${body}`;
+  });
 
   return {
     evaluate: async (source, timeoutMs) => {
@@ -1969,7 +2039,9 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
       return evaluate(env, source, timeoutMs, timeoutCtl);
     },
     definePrimitive,
-    listPrimitives: () => [...extPrims].map(([name, m]) => ({ name, ...m })),
+    defineLibrary,
+    listPrimitives: () => [...extPrims].map(([name, m]) => ({ name, signature: m.signature, doc: m.doc })),
+    listLibraries: () => [...libraries].map(([name, l]) => ({ name, description: l.description, count: l.primitives.length })),
     addGuard: (guard) => {
       guards.push(guard);
       return () => {

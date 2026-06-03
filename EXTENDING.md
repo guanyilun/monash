@@ -1,11 +1,18 @@
 # Extending monash
 
 monash has exactly one tool: `scheme_eval`. So you don't add capability by
-registering a *tool* — you register a **primitive** into the Scheme environment.
-The model then calls it like any built-in and composes it with the rest of the
-language in a single evaluation.
+registering a *tool* — you register **primitives** into the Scheme environment,
+grouped into a named **library**. The model then calls them like any built-in and
+composes them with the rest of the language in a single evaluation.
 
-There are two ways to register one, depending on how you ship the extension.
+You first register a library, then define its primitives through the returned
+handle. The library is the unit of *progressive disclosure*: only library
+name+description sits in the system prompt; the agent pulls a library's full
+primitive docs into context on demand with `(load-library "name")` (see
+[Libraries & disclosure](#libraries--disclosure)). Primitives are callable the
+moment they're registered — loading only governs where their docs show up.
+
+There are two ways to register, depending on how you ship the extension.
 
 ## A single-file drop-in
 
@@ -20,7 +27,11 @@ to resolve:
 ```ts
 // ~/.monash/extensions/http.mts
 export default function activate(ctx: any) {
-  ctx.call("scheme:define-primitive", {
+  const http = ctx.call("scheme:define-library", {
+    name: "http",
+    description: "Make HTTP requests.",   // one-liner shown in the prompt catalog
+  });
+  http.definePrimitive({
     name: "http-get",
     signature: '(http-get "url") → ((status . n) (body . str))',
     doc: "HTTP GET a URL; returns the status code and response body",
@@ -31,6 +42,10 @@ export default function activate(ctx: any) {
   });
 }
 ```
+
+`ctx.call("scheme:define-library", …)` returns a handle whose `definePrimitive`
+tags each primitive with the library — `ctx.call` is in-process here, so the
+handle is a real object, not a wire message.
 
 The complete version (with a `json` primitive too) is in
 [`examples/http.mts`](examples/http.mts) — copy it to
@@ -47,8 +62,11 @@ shape as ashi's `createUi`: real types, no magic strings.
 import { createScheme } from "monash/scheme";
 
 export default function activate(ctx) {
-  const scheme = createScheme(ctx);
-  scheme.definePrimitive({
+  const db = createScheme(ctx).defineLibrary({
+    name: "db",
+    description: "Query the project database.",
+  });
+  db.definePrimitive({
     name: "db-query",
     signature: '(db-query "sql") → (listof alist)',
     doc: "run a read-only SQL query; each row is an alist",
@@ -57,10 +75,10 @@ export default function activate(ctx) {
 }
 ```
 
-`createScheme` degrades gracefully: under a non-monash host `definePrimitive`
-no-ops and `listPrimitives()` returns `[]`, so the same extension stays loadable
-elsewhere. Both paths register the identical spec and behave identically — the
-wrapper is just typed sugar over the same `ctx.call`.
+`createScheme` degrades gracefully: under a non-monash host `defineLibrary`
+returns a handle whose `definePrimitive` no-ops, so the same extension stays
+loadable elsewhere. Both paths register the identical spec — the wrapper is just
+typed sugar over the same `ctx.call`.
 
 ## Composing
 
@@ -172,15 +190,43 @@ installed with `monash install` gets an `npm install`, which makes the import
 resolve; an extension developed inside a project simply lists monash as a
 dependency.
 
-## What the model sees
+## Libraries & disclosure
 
-Registered primitives are advertised automatically — you don't wire discovery:
+The system prompt does **not** list every primitive — that would bloat context
+and blur the model's focus as libraries accumulate. Instead it lists library
+*headers* (name + the one-line `description`), and the model pulls a library's
+full docs into context only when it needs them:
 
-- A **`## Extension primitives`** section in the system prompt, listing each
-  `signature` and `doc`. Built once after all extensions load, so it's complete
-  and stays cache-stable for the session.
-- **`(help)`** lists every primitive (built-in and yours); **`(help 'http-get)`**
-  shows one with its doc.
+```
+## Primitive libraries
+  ads — Search astronomy/physics literature on NASA ADS — papers, citations, PDFs.
+  http — Make HTTP requests.
+```
+
+This mirrors a skill exactly — `description` is the always-present one-liner;
+`doc` is the on-demand body:
+
+- **`description`** (required) — the one sharp sentence in the prompt catalog.
+  It's the model's whole basis for deciding to load the library, so make it count.
+- **`doc`** (optional) — longer library-level instructions, shown *only* on load.
+  Put guidance here that applies to the whole library (e.g. "read `SKILL.md`
+  before composing queries"), not glued to one primitive.
+
+- **`(load-library "ads")`** → returns the library's `doc` (if any) followed by
+  every primitive's signature+doc; it lands in the conversation and stays until
+  compaction (same lifecycle as a loaded skill).
+- **`(libraries)`** → returns the catalog as *data* — `((name . "ads")
+  (description . "…") (count . 4) (loaded . #f)) …` — so the model can reason
+  about what to pull in.
+- **`(help)`** / **`(help 'ads-search)`** still do flat lookup across everything.
+
+The split that makes this cheap: **registration is free, documentation is the
+cost.** Every primitive is bound in the environment the moment it's registered,
+so it's callable from turn one whether or not its library is "loaded" — loading
+only governs whether the docs are *in front of* the model.
+
+Standalone `definePrimitive` (no library) still works — its primitives land in a
+`misc` library — but prefer `defineLibrary` so related primitives disclose together.
 
 ## Gating primitive calls (permissions)
 

@@ -37,11 +37,14 @@ async function withDisplay(
   return result;
 }
 
-const { Pair, nil, LSymbol, LNumber, bootstrap, LString } = lips as any;
+const { Pair, nil, LSymbol, LNumber, bootstrap, LString, LCharacter } = lips as any;
 
 // LIPS 1.0 boxes string literals as LString; unbox to a JS primitive so the gap
 // shims and host bridge (which assume JS strings) operate on them correctly.
-const toJsStr = (x: any): any => (x instanceof LString ? x.toString() : x);
+const toJsStr = (x: any): any =>
+  x instanceof LString ? x.toString()
+  : LCharacter && x instanceof LCharacter ? x.valueOf()
+  : x;
 
 // LIPS 1.0 stores a symbol's name in `__name__`; `.name` is undefined (the 0.x
 // build used `.name`). Read every symbol name through this so both builds work.
@@ -614,6 +617,8 @@ function installStdShims(env: any): void {
   defineIfMissing("fourth", (lst: any) => pairToArray(lst)[3]);
   defineIfMissing("fifth",  (lst: any) => pairToArray(lst)[4]);
   defineIfMissing("last",   (lst: any) => { const a = pairToArray(lst); return a[a.length - 1]; });
+  defineIfMissing("list-head", (lst: any, n: any) =>
+    toSchemeList(pairToArray(lst).slice(0, Math.max(0, Math.floor(Number(n) || 0)))));
   defineIfMissing("take-while", (pred: any, lst: any) => {
     const out: any[] = [];
     for (const x of pairToArray(lst)) { if (!truthy(pred(x))) break; out.push(x); }
@@ -1707,7 +1712,11 @@ function installBindings(
       if (!isNaN(n)) args.limit = n;
     }
     const result = await readFile(args);
-    return result.isError ? false : result.content;
+    if (result.isError) return false;
+    if (typeof result.content !== "string") return result.content;
+    return result.content
+      .replace(/\n\[\d+ more lines, use offset=\d+ to continue\]$/, "")
+      .replace(/^\d+\t/gm, "");
   }));
 
   env.set("write-file", withSig("write-file", async (filePath: string, content: string) => {
@@ -1734,7 +1743,10 @@ function installBindings(
         bus, "edit_file", "write", toolArgs, filePath,
         () => editFile(toolArgs),
       );
-      return result.isError ? result.content : true;
+      if (result.isError) return result.content;
+      if (/\(\+0 -0\)/.test(String(result.content ?? "")))
+        return "edit-file: old_text matched but is identical to new_text — nothing changed";
+      return true;
     }));
   }
 
@@ -1820,15 +1832,28 @@ function installBindings(
     if (h) return `${sigLine(h)}${h.doc ? `\n    ${h.doc}` : ""}`;
     const e = extPrims.get(key);
     if (e) return `${e.signature ?? `(${key} …)`}${e.doc ? `\n    ${e.doc}` : ""}`;
-    return `no primitive named ${key}; try (help) for the list`;
+    const bound = (env as any).get(key, { throwError: false });
+    if (bound !== undefined) {
+      const kind = typeof bound === "function" ? "procedure" : "value";
+      return `${key}: built-in ${kind} (R7RS/SRFI-1/Racket stdlib; no host signature). Call it directly; (apropos-list "${key}") finds related names.`;
+    }
+    return `no binding named ${key}; (apropos-list "${key}") searches all names, (help) lists host primitives`;
   });
 
-  const stringContains = (s: unknown, needle: unknown) => {
+  const asStrings = (s: unknown, needle: unknown): [string, string] | null => {
     s = toJsStr(s); needle = toJsStr(needle);
-    return typeof s === "string" && typeof needle === "string" && s.includes(needle);
+    return typeof s === "string" && typeof needle === "string" ? [s, needle] : null;
   };
-  env.set("string-contains?", stringContains);
-  env.set("string-contains", stringContains);
+  env.set("string-contains?", (s: unknown, needle: unknown) => {
+    const p = asStrings(s, needle);
+    return p ? p[0].includes(p[1]) : false;
+  });
+  env.set("string-contains", (s: unknown, needle: unknown) => {
+    const p = asStrings(s, needle);
+    if (!p) return false;
+    const i = p[0].indexOf(p[1]);
+    return i < 0 ? false : i;
+  });
   env.set("string-replace", (oldStr: unknown, newStr: unknown, s: unknown) => {
     s = toJsStr(s);
     if (typeof s !== "string") return s;
@@ -1843,6 +1868,12 @@ function installBindings(
     let tail: any = nil;
     for (let i = parts.length - 1; i >= 0; i--) tail = new Pair(parts[i], tail);
     return tail;
+  });
+  env.set("unlines", (lst: unknown) => {
+    let out = "";
+    let cur: any = lst;
+    while (cur instanceof Pair) { out += String(toJsStr(cur.car)) + "\n"; cur = cur.cdr; }
+    return out;
   });
 }
 

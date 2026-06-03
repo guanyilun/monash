@@ -11,6 +11,7 @@
     "lib/",
     "examples/",
     "README.md",
+    "CHANGELOG.md",
     "EXTENDING.md",
     "LICENSE"
   ],

@@ -59,7 +59,7 @@ as a directory extension via `monash install ./my-ext` (which runs `npm install`
 shape as ashi's `createUi`: real types, no magic strings.
 
 ```ts
-import { createScheme } from "monash/scheme";
+import { createScheme } from "@guanyilun/monash/scheme";
 
 export default function activate(ctx) {
   const db = createScheme(ctx).defineLibrary({
@@ -162,7 +162,7 @@ The generated signature above is
 the keyword tail yourself with the `kwargs` helper:
 
 ```ts
-import { kwargs } from "monash/scheme";
+import { kwargs } from "@guanyilun/monash/scheme";
 
 fn: (query, ...rest) => {
   const { limit = 10, "sort-by": sort = "date" } = kwargs(rest);
@@ -182,7 +182,7 @@ itself — so registering in `activate()` is always safe; the
 2. **`~/.monash/extensions/`** — a drop-in file, or `monash install <name>`.
 3. **`~/.monash/settings.json`** — an `extensions: [...]` array.
 
-Why two registration styles: Node resolves `import "monash/scheme"` relative to
+Why two registration styles: Node resolves `import "@guanyilun/monash/scheme"` relative to
 *your file's* location. A loose file in `~/.monash/extensions/` has no
 `node_modules` containing monash (a global install isn't on that path), so the
 import can't resolve — hence `ctx.call` for drop-ins. A directory extension
@@ -241,7 +241,7 @@ oversight, and you can use both:
   every extension primitive, with the call's resolved arguments, and can deny:
 
 ```ts
-import { createScheme } from "monash/scheme";
+import { createScheme } from "@guanyilun/monash/scheme";
 
 export default function activate(ctx) {
   const scheme = createScheme(ctx);

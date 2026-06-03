@@ -1,5 +1,5 @@
 {
-  "name": "monash",
+  "name": "@guanyilun/monash",
   "version": "0.1.0",
   "description": "An agent with a single tool: a Lisp (Scheme) evaluator. ash, reduced to one verb.",
   "type": "module",

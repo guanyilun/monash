@@ -10,7 +10,7 @@ works by composing them into expressions instead of firing one-shot tool calls.
 ## Install
 
 ```sh
-npm i -g monash
+npm i -g @guanyilun/monash
 ```
 
 ## Use
@@ -71,7 +71,7 @@ monash-specific pieces live here and ship on their own cadence:
   tool description.
 - `lib/monash.ts` — the agent integration: registers the one tool, the system
   prompt, and the renderer.
-- `lib/scheme-api.ts` — the extension API (`monash/scheme`): `createScheme(ctx)`.
+- `lib/scheme-api.ts` — the extension API (`@guanyilun/monash/scheme`): `createScheme(ctx)`.
 - `bin.mjs` — the launcher.
 
 ```sh

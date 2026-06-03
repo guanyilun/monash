@@ -54,6 +54,32 @@ const CONFIG_DIR = process.env.AGENT_SH_HOME
 const LOG_PATH = path.join(CONFIG_DIR, "scheme-eval.log");
 export const MAX_OUTPUT_LEN = 128 * 1024;
 
+// Split a write-style list's inner text into its top-level parts (groups stay
+// whole, strings stay whole, atoms split on whitespace, `.` is its own token).
+function topLevelParts(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, inStr = false, esc = false, cur = "";
+  const flush = () => { if (cur.length) { parts.push(cur); cur = ""; } };
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inStr) { cur += ch; if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; cur += ch; continue; }
+    if (ch === "(") { depth++; cur += ch; continue; }
+    if (ch === ")") { depth--; cur += ch; if (depth === 0) flush(); continue; }
+    if (depth === 0 && /\s/.test(ch)) { flush(); continue; }
+    cur += ch;
+  }
+  flush();
+  return parts;
+}
+const innerOf = (g: string): string => (g.startsWith("(") && g.endsWith(")") ? g.slice(1, -1) : g);
+const isSymbolToken = (t?: string): boolean =>
+  !!t && !t.startsWith("(") && !t.startsWith('"') && t !== "." && !/^[-+]?\d/.test(t);
+// A record is a list whose first element is itself a list — distinguishes a list
+// of records (papers) from a single nested record `(meta (a . 1) (b . 2))`.
+const recordLike = (t: string): boolean =>
+  t.startsWith("(") && (topLevelParts(innerOf(t))[0] ?? "").startsWith("(");
+
 export function summarizeResult(content: string, isError: boolean): string {
   if (isError) return "error";
   const c = content;
@@ -72,31 +98,22 @@ export function summarizeResult(content: string, isError: boolean): string {
     return `${lines} line${lines === 1 ? "" : "s"}`;
   }
   if (c.startsWith("(") && c.endsWith(")")) {
-    let depth = 0, count = 0, inStr = false, esc = false, inAtom = false;
-    for (let i = 1; i < c.length - 1; i++) {
-      const ch = c[i];
-      if (esc) { esc = false; continue; }
-      if (inStr) {
-        if (ch === "\\") esc = true;
-        else if (ch === '"') inStr = false;
-        continue;
+    const elems = topLevelParts(innerOf(c));
+    const entries = elems.map((e) => topLevelParts(innerOf(e)));
+    // An alist: every element is `(symbol …)`. Summarize its record-collection
+    // fields by name (3 papers, 2 tables); a plain record falls back to N fields.
+    const isAlist = elems.length > 0 && elems.every((e, i) => e.startsWith("(") && isSymbolToken(entries[i]![0]));
+    if (isAlist) {
+      const collections: string[] = [];
+      for (const toks of entries) {
+        const value = toks.slice(1);
+        if (value[0] === ".") continue;
+        if (value.length > 0 && value.every(recordLike)) collections.push(`${value.length} ${toks[0]}`);
       }
-      if (ch === '"') {
-        if (depth === 0 && !inAtom) { count++; inAtom = true; }
-        inStr = true;
-      } else if (ch === "(") {
-        if (depth === 0) count++;
-        depth++;
-        inAtom = false;
-      } else if (ch === ")") {
-        depth--;
-        inAtom = false;
-      } else if (depth === 0) {
-        if (/\s/.test(ch)) inAtom = false;
-        else if (!inAtom) { count++; inAtom = true; }
-      }
+      if (collections.length) return collections.join(", ");
+      return `${elems.length} field${elems.length === 1 ? "" : "s"}`;
     }
-    return `${count} item${count === 1 ? "" : "s"}`;
+    return `${elems.length} item${elems.length === 1 ? "" : "s"}`;
   }
   if (c.includes("\n")) {
     const lines = c.split("\n").length;

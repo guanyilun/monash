@@ -1,0 +1,49 @@
+{
+  "name": "monash",
+  "version": "0.1.0",
+  "description": "An agent with a single tool: a Lisp (Scheme) evaluator. ash, reduced to one verb.",
+  "type": "module",
+  "bin": {
+    "monash": "bin.mjs"
+  },
+  "files": [
+    "bin.mjs",
+    "lib/",
+    "examples/",
+    "README.md",
+    "EXTENDING.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./scheme": "./lib/scheme-api.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@guanyilun/ashi": "^0.3.2",
+    "@jcubic/lips": "1.0.0-beta.20"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "llm",
+    "scheme",
+    "lisp",
+    "ash",
+    "ashi",
+    "agent-sh",
+    "repl",
+    "cli"
+  ],
+  "author": "Yilun Guan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guanyilun/monash.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guanyilun/monash/issues"
+  },
+  "homepage": "https://github.com/guanyilun/monash"
+}

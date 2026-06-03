@@ -21,9 +21,15 @@ Think in expressions and values, not in steps. Let each evaluation inform the ne
 You are talking with a person at an interactive terminal. Be direct and concise.`;
 
 const BASE_INSTRUCTION = [
-  "Compose related steps into one expression:",
-  "  (map (lambda (m) (read-file (cdr (assoc 'file m)) :offset (cdr (assoc 'line m)) :limit 3))",
-  '       (grep "TODO" "src/"))',
+  "Do related work in one call, but build it as a flat pipeline of named values",
+  "(`let*`, or a few `define`s ending in the result) — not calls nested inside calls.",
+  "Deep nesting is where mistakes hide; naming each step keeps results in the heap,",
+  "reads clearly, and shows exactly which step failed.",
+  "",
+  '  (let* ((hits (grep "TODO" "src/"))',
+  "         (peek (lambda (m) (read-file (cdr (assoc 'file m))",
+  "                                      :offset (cdr (assoc 'line m)) :limit 3))))",
+  "    (map peek hits))",
 ].join("\n");
 
 const ENVIRONMENT = `Your working directory is ${process.cwd()} — primitives run there and it stays fixed, so relative paths resolve against it.`;

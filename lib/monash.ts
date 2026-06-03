@@ -26,6 +26,8 @@ const BASE_INSTRUCTION = [
   '       (grep "TODO" "src/"))',
 ].join("\n");
 
+const ENVIRONMENT = `Your working directory is ${process.cwd()} — primitives run there and it stays fixed, so relative paths resolve against it.`;
+
 const KERNEL_TOOLS = ["bash", "pwsh", "read_file", "write_file", "edit_file", "ls", "glob", "grep"];
 
 function parseRaw(raw: unknown): Record<string, unknown> {
@@ -232,7 +234,7 @@ export default function activate(ctx: AgentContext): void {
 
   const guide = docsGuide();
   ctx.advise("system-prompt:build", () => {
-    const parts = [IDENTITY, BASE_INSTRUCTION];
+    const parts = [IDENTITY, ENVIRONMENT, BASE_INSTRUCTION];
     const prims = interp.listPrimitives();
     if (prims.length > 0) {
       const catalog = prims

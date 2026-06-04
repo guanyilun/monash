@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure in the eval logs.
 
 ### Added
+- A per-request context block listing the variables the agent has `define`d this
+  session (name + a type/size summary), so it reuses bindings instead of
+  re-reading or recomputing. It's read from the live interpreter heap on every
+  request, so it reflects new `define`s immediately, is empty in a fresh or
+  resumed process, and stays consistent through compaction. Registered via
+  agent-sh's `registerContextProducer` (`mode: "per-request"`).
+- `bindings` primitive — returns the session's `define`d names with a type/size
+  summary as an alist. The context block lists only the 40 most recent; this is
+  the agent's escape hatch to see the full set when that truncates.
 - `list-head` (SRFI-1 / Guile alias for `take`).
 - `unlines` — lossless inverse of `lines` (joins with `\n` and terminates with a
   trailing newline), so `read → lines → … → unlines → write-file` round-trips

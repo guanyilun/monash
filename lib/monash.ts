@@ -261,6 +261,17 @@ export default function activate(ctx: AgentContext): void {
     ctx.define(`ashi:render-tool:${n}`, () => renderModel);
   }
 
+  ctx.agent.registerContextProducer("monash-bindings", () => {
+    const all = interp.listBindings();
+    if (all.length === 0) return null;
+    const MAX = 40;
+    const shown = all.length > MAX ? all.slice(-MAX) : all;
+    const width = Math.min(24, Math.max(...shown.map((b) => b.name.length)));
+    const lines = shown.map((b) => `  ${b.name.padEnd(width)}  ${b.summary}`);
+    if (all.length > MAX) lines.unshift(`  …${all.length - MAX} earlier — call (bindings) to list all`);
+    return ["Defined this session — reuse instead of re-reading or recomputing:", ...lines].join("\n");
+  }, { mode: "per-request" });
+
   const guide = docsGuide();
   ctx.advise("system-prompt:build", () => {
     const parts = [IDENTITY, ENVIRONMENT, BASE_INSTRUCTION];

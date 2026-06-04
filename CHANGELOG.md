@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Simplified the system prompt for smaller models. It now leads with a worked
+  example of each primitive call (`read-file`, `write-file`, `edit-file`, `grep`,
+  `glob`, `bash`) as the central content, then gives a short set of
+  copy-pasteable patterns each keyed to the situation that triggers it: `let*`
+  when each step needs the previous result, `list`/`map` when the calls are
+  independent, and a single `bash` call when several shell commands are needed.
+  It also notes that `define`d names persist across calls, so the agent can reuse
+  a value instead of re-reading or recomputing it. The Scheme-dialect rules are
+  demoted to a trailing note. This replaces the
+  previous abstract framing, which pushed deep nested pipelines — the most common
+  failure in the eval logs.
+
 ### Added
 - `list-head` (SRFI-1 / Guile alias for `take`).
 - `unlines` — lossless inverse of `lines` (joins with `\n` and terminates with a

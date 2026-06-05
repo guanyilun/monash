@@ -1478,10 +1478,11 @@ function unwrapSchemeBool(v: any): any {
 
 type HostSig = { name: string; sig: string; ret: string; doc?: string };
 const HOST_SIGS: HostSig[] = [
-  { name: "bash", sig: '(bash "cmd" [:timeout sec])',
+  { name: "bash", sig: '(bash "cmd" [:timeout sec])', ret: "str",
+    doc: "run a shell command; stdout as a string" },
+  { name: "sh", sig: '(sh "cmd" [:timeout sec])',
     ret: "((output . str) (exit-code . n) (error . bool))",
     doc: "run a shell command; full result. Accessors: output-of exit-code-of ok? error?" },
-  { name: "sh", sig: '(sh "cmd" [:timeout sec])', ret: "str" },
   { name: "read-file", sig: '(read-file "path" [:offset n] [:limit n])', ret: "str | #f",
     doc: "file contents, or #f on error. :offset is 1-indexed; :limit caps lines" },
   { name: "write-file", sig: '(write-file "path" "content")', ret: "#t | err-str" },
@@ -1675,15 +1676,10 @@ function installBindings(
     const command = positionals[0];
     await runGuards("bash", [command]);
     try {
-      const r = await runBash(command, bashTimeout(positionals, opts));
-      return alist([
-        ["output",    r.output],
-        ["exit-code", r.exitCode],
-        ["error",     r.error],
-      ]);
+      return (await runBash(command, bashTimeout(positionals, opts))).output;
     } catch (e: any) {
-      logErr("bash", e, { command, typeofCommand: typeof command });
-      throw e;
+      logErr("bash", e, { command });
+      return "";
     }
   }));
   env.set("sh", withSig("sh", async (...rest: any[]) => {
@@ -1691,10 +1687,15 @@ function installBindings(
     const command = positionals[0];
     await runGuards("sh", [command]);
     try {
-      return (await runBash(command, bashTimeout(positionals, opts))).output;
+      const r = await runBash(command, bashTimeout(positionals, opts));
+      return alist([
+        ["output",    r.output],
+        ["exit-code", r.exitCode],
+        ["error",     r.error],
+      ]);
     } catch (e: any) {
-      logErr("sh", e, { command });
-      return "";
+      logErr("sh", e, { command, typeofCommand: typeof command });
+      throw e;
     }
   }));
 

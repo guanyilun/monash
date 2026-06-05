@@ -1930,6 +1930,8 @@ export interface Interpreter {
   defineLibrary(spec: LibrarySpec): Library;
   listPrimitives(): Array<{ name: string; signature?: string; doc?: string }>;
   listLibraries(): LibraryInfo[];
+  /** What the agent has `define`d this session (name + type/size summary). */
+  listBindings(): Array<{ name: string; summary: string }>;
   addGuard(guard: Guard): () => void;
 }
 
@@ -2064,15 +2066,50 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
     return lib.doc ? `${header}\n${lib.doc}\n\n${body}` : `${header}\n${body}`;
   });
 
+  // Baseline = heap before the agent's first eval; the delta is the agent's own
+  // defines. Snapshotted lazily, so a resumed (fresh) process starts empty.
+  let bindingBaseline: Set<string> | null = null;
+  const ownKeys = (): string[] => Object.keys((env as any).__env__ ?? {});
+  const summarizeBinding = (v: any): string => {
+    if (typeof v === "function") return "procedure";
+    if (LString && v instanceof LString) {
+      const len = v.toString().length;
+      return len >= 1024 ? `string (${(len / 1024).toFixed(1)} KB)` : `string (${len} chars)`;
+    }
+    if (v instanceof Pair) {
+      let n = 0; let cur: any = v;
+      while (cur instanceof Pair && n < 10000) { n++; cur = cur.cdr; }
+      return n >= 10000 ? "list (10000+ elements)" : `list (${n} element${n === 1 ? "" : "s"})`;
+    }
+    if (v === nil) return "list (0 elements)";
+    if (LNumber && v instanceof LNumber) return `number ${v.toString()}`;
+    if (typeof v === "number") return `number ${v}`;
+    if (typeof v === "boolean") return v ? "#t" : "#f";
+    if (LCharacter && v instanceof LCharacter) return "char";
+    return (v?.constructor?.name ?? typeof v).toLowerCase();
+  };
+  const listUserBindings = (): Array<{ name: string; summary: string }> => {
+    if (!bindingBaseline) return [];
+    const out: Array<{ name: string; summary: string }> = [];
+    for (const k of ownKeys()) {
+      if (bindingBaseline.has(k)) continue;
+      out.push({ name: k, summary: summarizeBinding((env as any).get(k, { throwError: false })) });
+    }
+    return out;
+  };
+  env.set("bindings", () => alist(listUserBindings().map((b) => [b.name, b.summary])));
+
   return {
     evaluate: async (source, timeoutMs) => {
       await ready;
+      if (!bindingBaseline) bindingBaseline = new Set(ownKeys());
       return evaluate(env, source, timeoutMs, timeoutCtl);
     },
     definePrimitive,
     defineLibrary,
     listPrimitives: () => [...extPrims].map(([name, m]) => ({ name, signature: m.signature, doc: m.doc })),
     listLibraries: () => [...libraries].map(([name, l]) => ({ name, description: l.description, count: l.primitives.length })),
+    listBindings: listUserBindings,
     addGuard: (guard) => {
       guards.push(guard);
       return () => {

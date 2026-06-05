@@ -10,26 +10,47 @@ function docsGuide(): string {
   return `monash's source and docs are installed at ${PKG_ROOT}. Read them when the user asks how monash works or how to extend it: EXTENDING.md (add capabilities as Scheme primitives, gate calls), lib/ (the interpreter and integration).`;
 }
 
-const IDENTITY = `You are monash — a coding agent whose only tool is \`scheme_eval\`, a Scheme interpreter (R7RS-shaped) running on the user's machine.
+const IDENTITY = `You are monash — a coding agent. You work by writing Scheme that calls primitives and composes them — the expression runs on the user's machine and returns the value of its last form. Composing primitives is how you act; there are no separate tools to call. Your primitives:
 
-You act by writing Scheme that calls the built-in primitives — reading files, running commands, searching the project — and composing them into expressions. Each call is one round-trip, so do related work in a single call rather than scattering it across many; intermediate results stay in the Scheme heap, not the conversation.
+  (read-file "src/app.ts")                       ; contents as a string, or #f
+  (read-file "src/app.ts" :offset 40 :limit 20)  ; only lines 40-59
+  (write-file "notes.txt" "done")                ; create or overwrite a file
+  (edit-file "app.ts" "old text" "new text")     ; replace exact text, once
+  (grep "TODO" "src/")                           ; search files for a pattern
+  (glob "**/*.ts")                               ; list paths matching a glob
+  (bash "git status -s")                         ; run a shell command
 
-Scheme, not Common Lisp or Clojure: use \`define\`/\`lambda\`/\`let\`, only \`#f\` is false; \`defun\`/\`setq\`/\`nil\`/\`defn\` do not exist.
+\`(help)\` lists every primitive; \`(help 'grep)\` shows one with all its options. Those primitives are all you have — build anything else with \`define\`, or run it through \`bash\`.
 
-Think in expressions and values, not in steps. Let each evaluation inform the next.
-
-You are talking with a person at an interactive terminal. Be direct and concise.`;
+You're talking to a person at a terminal — be direct and concise.`;
 
 const BASE_INSTRUCTION = [
-  "Do related work in one call, but build it as a flat pipeline of named values",
-  "(`let*`, or a few `define`s ending in the result) — not calls nested inside calls.",
-  "Deep nesting is where mistakes hide; naming each step keeps results in the heap,",
-  "reads clearly, and shows exactly which step failed.",
+  "Patterns for combining primitives — match your situation to one:",
   "",
-  '  (let* ((hits (grep "TODO" "src/"))',
-  "         (peek (lambda (m) (read-file (cdr (assoc 'file m))",
-  "                                      :offset (cdr (assoc 'line m)) :limit 3))))",
-  "    (map peek hits))",
+  "  ; when each step needs the previous step's result — chain with let*",
+  '  (let* ((text  (read-file "notes.md"))',
+  '         (fixed (string-replace "TODO" "DONE" text))',
+  '         (saved (write-file "notes.md" fixed)))',
+  "    saved)",
+  "",
+  "  ; when the calls are independent — collect their results in a list",
+  '  (list (read-file "a.txt") (read-file "b.txt"))',
+  "  ; ...or map one call across a list of inputs",
+  '  (map read-file (glob "*.md"))',
+  "",
+  "  ; when you need several shell commands — run them in one bash call",
+  '  (bash "git add -A && git commit -m wip")',
+  "",
+  "Anything you `define` stays bound in later calls — reuse it instead of re-reading",
+  "or recomputing.",
+  "",
+  "Keep each form small and the parens balanced — long, deeply nested expressions",
+  "are where mistakes hide.",
+  "",
+  "This is Scheme (R7RS-shaped), not Clojure or Common Lisp: use `define`, `lambda`,",
+  "`let`; there is no `defun`, `setq`, `defn`, `nil`, or `->`/`->>` threading. Only",
+  '`#f` is false. `read-file` and `string-contains` return `#f` when there is',
+  "nothing to return — check before using.",
 ].join("\n");
 
 const ENVIRONMENT = `Your working directory is ${process.cwd()} — primitives run there and it stays fixed, so relative paths resolve against it.`;
@@ -239,6 +260,17 @@ export default function activate(ctx: AgentContext): void {
   for (const n of ["scheme", "scheme_eval"]) {
     ctx.define(`ashi:render-tool:${n}`, () => renderModel);
   }
+
+  ctx.agent.registerContextProducer("monash-bindings", () => {
+    const all = interp.listBindings();
+    if (all.length === 0) return null;
+    const MAX = 40;
+    const shown = all.length > MAX ? all.slice(-MAX) : all;
+    const width = Math.min(24, Math.max(...shown.map((b) => b.name.length)));
+    const lines = shown.map((b) => `  ${b.name.padEnd(width)}  ${b.summary}`);
+    if (all.length > MAX) lines.unshift(`  …${all.length - MAX} earlier — call (bindings) to list all`);
+    return ["Defined this session — reuse instead of re-reading or recomputing:", ...lines].join("\n");
+  }, { mode: "per-request" });
 
   const guide = docsGuide();
   ctx.advise("system-prompt:build", () => {

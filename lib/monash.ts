@@ -41,8 +41,8 @@ const BASE_INSTRUCTION = [
   "  ; when you need several shell commands — run them in one bash call",
   '  (bash "git add -A && git commit -m wip")',
   "",
-  "Anything you `define` stays bound in later calls — reuse it instead of re-reading",
-  "or recomputing.",
+  "Anything you `define` stays bound in later calls — build helpers and reuse them",
+  "instead of re-reading or recomputing.",
   "",
   "Keep each form small and the parens balanced — long, deeply nested expressions",
   "are where mistakes hide.",
@@ -121,6 +121,63 @@ function gatedOps(source: string, names: string[]): string[] {
   return names.filter((n) => tokens.has(n));
 }
 
+function compoundShapes(source: string): Array<{ skeleton: string; sample: string }> {
+  const code = stripComments(source) || source;
+  const n = code.length;
+  let i = 0;
+  const isDelim = (c: string) => /[\s()[\]"'`,;]/.test(c);
+  const skip = () => { while (i < n && /\s/.test(code[i])) i++; };
+  function readForm(): { skel: string; text: string } | null {
+    skip();
+    if (i >= n) return null;
+    const c = code[i];
+    if (c === "(" || c === "[") {
+      i++;
+      const skel: string[] = [], text: string[] = [];
+      for (;;) {
+        skip();
+        if (i >= n || code[i] === ")" || code[i] === "]") { i++; break; }
+        const f = readForm();
+        if (!f) break;
+        skel.push(f.skel); text.push(f.text);
+      }
+      return { skel: "(" + skel.join(" ") + ")", text: "(" + text.join(" ") + ")" };
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && code[j] !== '"') { if (code[j] === "\\") j++; j++; }
+      const text = code.slice(i, Math.min(j + 1, n));
+      i = Math.min(j + 1, n);
+      return { skel: '"_"', text };
+    }
+    if (c === "'" || c === "`" || c === ",") {
+      i++;
+      const f = readForm();
+      return f ? { skel: c + f.skel, text: c + f.text } : { skel: c, text: c };
+    }
+    let j = i;
+    while (j < n && !isDelim(code[j])) j++;
+    const tok = code.slice(i, j);
+    i = j;
+    const skel = /^[+-]?(\d|\.\d)/.test(tok) && !isNaN(Number(tok)) ? "0" : tok;
+    return { skel, text: tok };
+  }
+  const out: Array<{ skeleton: string; sample: string }> = [];
+  for (;;) {
+    skip();
+    if (i >= n) break;
+    const before = i;
+    const f = readForm();
+    if (!f) { if (i === before) i++; continue; }
+    const head = f.skel.match(/^\(([^\s()]+)/)?.[1] ?? "";
+    const nested = (f.skel.match(/\(/g) || []).length;
+    if (nested >= 2 && head !== "define" && head !== "define-macro") {
+      out.push({ skeleton: f.skel, sample: f.text });
+    }
+  }
+  return out;
+}
+
 const renderModel = {
   initial: ({ rawInput }: any) => ({ source: sourceOf(rawInput) }),
   view: (s: any, env: any) => {
@@ -145,6 +202,25 @@ const renderModel = {
 
 export default function activate(ctx: AgentContext): void {
   const interp = createInterpreter(ctx);
+
+  const MAX_SHAPES = 4096;
+  let callSeq = 0;
+  const shapeHits = new Map<string, { count: number; lastSeq: number; sample: string }>();
+  const nudged = new Set<string>();
+  const recordShapes = (source: string) => {
+    const seq = callSeq++;
+    for (const { skeleton, sample } of compoundShapes(source)) {
+      const hit = shapeHits.get(skeleton) ?? { count: 0, lastSeq: -1, sample };
+      if (hit.lastSeq !== seq) { hit.count++; hit.lastSeq = seq; }
+      hit.sample = sample;
+      shapeHits.delete(skeleton);
+      shapeHits.set(skeleton, hit);
+      if (shapeHits.size > MAX_SHAPES) {
+        const oldest = shapeHits.keys().next().value;
+        if (oldest !== undefined) { shapeHits.delete(oldest); nudged.delete(oldest); }
+      }
+    }
+  };
 
   const gated = (ctx.getExtensionSettings("monash", { gate: [] as string[] }).gate ?? []).map(String);
   let allowRestOfSession = false;
@@ -253,6 +329,7 @@ export default function activate(ctx: AgentContext): void {
       if (denied) return finish(denied, true);
       const result = await interp.evaluate(source, timeoutMs);
       if (!result.ok) return finish(`scheme error: ${result.error}`, true);
+      recordShapes(source);
       return finish(cap(result.value), false, cap(result.display ?? result.value));
     },
   });
@@ -270,6 +347,19 @@ export default function activate(ctx: AgentContext): void {
     const lines = shown.map((b) => `  ${b.name.padEnd(width)}  ${b.summary}`);
     if (all.length > MAX) lines.unshift(`  …${all.length - MAX} earlier — call (bindings) to list all`);
     return ["Defined this session — reuse instead of re-reading or recomputing:", ...lines].join("\n");
+  }, { mode: "per-request" });
+
+  ctx.agent.registerContextProducer("monash-define-hint", () => {
+    const top = [...shapeHits.entries()]
+      .filter(([sk, h]) => h.count >= 2 && !nudged.has(sk))
+      .sort((a, b) => b[1].count - a[1].count)[0];
+    if (!top) return null;
+    const [skeleton, hit] = top;
+    nudged.add(skeleton);
+    return [
+      `\`define\` a helper for this — written ${hit.count}× across calls:`,
+      `  ${hit.sample}`,
+    ].join("\n");
   }, { mode: "per-request" });
 
   const guide = docsGuide();

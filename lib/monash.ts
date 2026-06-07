@@ -20,7 +20,7 @@ const IDENTITY = `You are monash — a coding agent. You work by writing Scheme 
   (glob "**/*.ts")                               ; list paths matching a glob
   (bash "git status -s")                         ; run a shell command
 
-\`(help)\` lists every primitive; \`(help 'grep)\` shows one with all its options. Those primitives are all you have — build anything else with \`define\`, or run it through \`bash\`.
+\`(help)\` lists these host primitives; \`(help 'grep)\` shows one with all its options. You also have a Scheme standard library — grouped into the libraries listed below, with \`(load-library 'strings)\` revealing one's full API. Build anything else with \`define\`, or run it through \`bash\`.
 
 You're talking to a person at a terminal — be direct and concise.`;
 
@@ -366,13 +366,23 @@ export default function activate(ctx: AgentContext): void {
   ctx.advise("system-prompt:build", () => {
     const parts = [IDENTITY, ENVIRONMENT, BASE_INSTRUCTION];
     const libs = interp.listLibraries();
-    if (libs.length > 0) {
-      const catalog = libs.map((l) => `  ${l.name}${l.description ? ` — ${l.description}` : ""}`).join("\n");
+    const fmt = (ls: typeof libs) =>
+      ls.map((l) => `  ${l.name}${l.description ? ` — ${l.description}` : ""}`).join("\n");
+    const std = libs.filter((l) => l.builtin);
+    const ext = libs.filter((l) => !l.builtin);
+    if (std.length > 0) {
       parts.push(
-        "## Primitive libraries\n" +
-        "Extensions grouped these; their primitives are callable now. " +
-        '`(load-library "name")` shows a library\'s signatures, `(libraries)` lists them as data.\n' +
-        catalog,
+        "## Standard library\n" +
+        "Built-in R7RS/SRFI/Racket procedures, grouped by domain — always present, no import needed. " +
+        '`(load-library "name")` shows a library\'s full signatures; `(libraries)` lists them as data.\n' +
+        fmt(std),
+      );
+    }
+    if (ext.length > 0) {
+      parts.push(
+        "## Extension libraries\n" +
+        "Capabilities this host added — callable now, same as the standard library.\n" +
+        fmt(ext),
       );
     }
     if (guide) parts.push(guide);

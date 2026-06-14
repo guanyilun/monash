@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   demoted to a trailing note. This replaces the
   previous abstract framing, which pushed deep nested pipelines — the most common
   failure in the eval logs.
+- The built-in standard library is now presented as a browsable catalog under a
+  `## Standard library` prompt section, grouped into domain libraries (`strings`,
+  `lists`, `hashtables`, `math`, `control`) and kept separate from host extension
+  libraries. Signatures use the host style — string arguments quoted, numbers
+  shown as `n` — so a primitive's argument types read clearly.
+- The combining-primitives guidance is framed as round-trip economy: group
+  related steps into a single evaluation, kept flat with `let*` rather than
+  deeply nested, so it reinforces the "keep each form small" note instead of
+  pushing toward nested pipelines.
+- `bash` returns stdout as a string and `sh` returns the full result alist
+  (`output` / `exit-code` / `error`); previously these return types were reversed.
+- Bumped `@guanyilun/ashi` to `^0.3.4`.
 
 ### Added
 - A per-request context block listing the variables the agent has `define`d this
@@ -34,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `unlines` — lossless inverse of `lines` (joins with `\n` and terminates with a
   trailing newline), so `read → lines → … → unlines → write-file` round-trips
   preserve the trailing newline that `string-split` trims.
+- A standard-library catalog browsable with `(libraries)` and
+  `(load-library 'name)`: the SRFI-1 / R7RS / Racket shim layer grouped into five
+  domain libraries (`lib/stdlib/`, one module each) with per-library signatures
+  and docs. The catalog is metadata only — every name stays always callable — and
+  each library is flagged built-in so it reads distinctly from host extensions.
+- "Did you mean" suggestions on unbound-variable errors: the nearest real
+  bindings (ranked by substring overlap, then edit distance) annotated with their
+  library and a pointer to `(load-library)`, so a misremembered name self-corrects.
+- A hint on `got boolean` type errors naming the usual cause — an unchecked `#f`
+  from a search or lookup (`string-index`, `string-contains`, `member`, `assoc`,
+  `find`, `hash-ref`, …) reaching a slot that needs a real value — with the
+  `(if v … fallback)` / `(or v default)` guard to apply.
+- A per-request nudge that spots a compound expression shape written two or more
+  times across calls and suggests `define`-ing it as a reusable helper.
 
 ### Fixed
 - `read-file` now returns raw file contents instead of the line-numbered
@@ -50,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for discovery.
 - `edit-file` reports a matched-but-identical edit (`+0 -0`) as a message
   rather than a bare `#t` that read as a successful change.
+- `apropos-list` (and the internal env-name walk behind it) returned nothing
+  because it read `.env` / `.parent`; this LIPS build exposes frames as
+  `__env__` / `__parent__`, which it now walks.
 
 ## [0.1.0] - 2026-06-03
 

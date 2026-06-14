@@ -1,0 +1,32 @@
+import type { CatalogLib } from "./types.ts";
+
+export const math: CatalogLib = {
+  name: "math",
+  description: "arithmetic, rounding, powers, trig, random",
+  primitives: [
+    { name: "quotient", signature: "(quotient a b) → n", doc: "Truncating integer division; remainder / modulo give the rest." },
+    { name: "remainder", signature: "(remainder a b) → n", doc: "Sign follows the dividend." },
+    { name: "modulo", signature: "(modulo a b) → n", doc: "Sign follows the divisor." },
+    { name: "abs", signature: "(abs x) → n" },
+    { name: "min", signature: "(min x ...) → n", doc: "max for the larger." },
+    { name: "max", signature: "(max x ...) → n" },
+    { name: "gcd", signature: "(gcd n ...) → n", doc: "lcm for least common multiple." },
+    { name: "lcm", signature: "(lcm n ...) → n" },
+    { name: "expt", signature: "(expt base power) → n", doc: "Exponentiation. sqrt for roots, sqr to square, add1/sub1 to step by one." },
+    { name: "sqrt", signature: "(sqrt x) → n" },
+    { name: "exp", signature: "(exp x) → n", doc: "log is the inverse; (log x base) takes an arbitrary base." },
+    { name: "log", signature: "(log x [base]) → n" },
+    { name: "floor", signature: "(floor x) → n", doc: "Also ceiling, truncate. exact-floor / exact-ceiling / exact-truncate return integers." },
+    { name: "ceiling", signature: "(ceiling x) → n" },
+    { name: "round", signature: "(round x) → n", doc: "Rounds half to even; exact-round returns an integer." },
+    { name: "truncate", signature: "(truncate x) → n" },
+    { name: "exact", signature: "(exact x) → n", doc: "exact->inexact / inexact->exact convert between exact and inexact." },
+    { name: "inexact", signature: "(inexact x) → n" },
+    { name: "number->string", signature: "(number->string n [radix]) → str" },
+    { name: "string->number", signature: "(string->number \"s\" [radix]) → n | #f" },
+    { name: "sin", signature: "(sin x) → n", doc: "Also cos, tan, asin, acos, atan and sinh/cosh/tanh. degrees->radians / radians->degrees convert." },
+    { name: "sgn", signature: "(sgn x) → -1 | 0 | 1" },
+    { name: "random", signature: "(random [n]) → n", doc: "(random) → real in [0,1); (random n) → integer in [0,n)." },
+    { name: "pi", signature: "pi → 3.14159…", doc: "A bound value, not a procedure." },
+  ],
+};

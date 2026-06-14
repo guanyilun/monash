@@ -1,0 +1,30 @@
+import type { CatalogLib } from "./types.ts";
+
+export const strings: CatalogLib = {
+  name: "strings",
+  description: "split, join, trim, search, replace, case",
+  primitives: [
+    { name: "string-append", signature: "(string-append \"s\" ...) → str", doc: "Concatenate." },
+    { name: "string-length", signature: "(string-length \"s\") → n" },
+    { name: "substring", signature: "(substring \"s\" start [end]) → str", doc: "start/end are indices (numbers), not #f — guard a search result first." },
+    { name: "string-upcase", signature: "(string-upcase \"s\") → str" },
+    { name: "string-downcase", signature: "(string-downcase \"s\") → str" },
+    { name: "string-split", signature: "(string-split \"s\" [sep]) → (listof str)",
+      doc: "String first (Racket order). sep is a literal or regexp; omitted splits on whitespace and drops empties." },
+    { name: "string-join", signature: "(string-join lst [\"sep\"]) → str", doc: "sep defaults to a single space." },
+    { name: "string-trim", signature: "(string-trim \"s\") → str", doc: "Both ends. Also string-trim-left, string-trim-right." },
+    { name: "string-prefix?", signature: "(string-prefix? \"prefix\" \"s\") → bool", doc: "Prefix first." },
+    { name: "string-suffix?", signature: "(string-suffix? \"suffix\" \"s\") → bool", doc: "Suffix first." },
+    { name: "string-contains", signature: "(string-contains \"s\" \"needle\") → n | #f", doc: "Index of the first match, or #f." },
+    { name: "string-contains?", signature: "(string-contains? \"s\" \"needle\") → bool" },
+    { name: "string-index", signature: "(string-index \"s\" \"needle\") → n | #f", doc: "Same as string-contains: substring index or #f." },
+    { name: "string-replace", signature: "(string-replace \"old\" \"new\" \"s\") → str", doc: "Every occurrence. Arg order is old, new, then the string." },
+    { name: "string->number", signature: "(string->number \"s\") → n | #f" },
+    { name: "number->string", signature: "(number->string n [radix]) → str" },
+    { name: "string->list", signature: "(string->list \"s\") → (listof char)" },
+    { name: "list->string", signature: "(list->string chars) → str" },
+    { name: "lines", signature: "(lines \"s\") → (listof str)", doc: "Split on newlines, dropping a trailing empty line." },
+    { name: "unlines", signature: "(unlines lst) → str", doc: "Join with newlines." },
+    { name: "non-empty-string?", signature: "(non-empty-string? x) → bool" },
+  ],
+};

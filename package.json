@@ -22,7 +22,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@guanyilun/ashi": "^0.3.2",
+    "@guanyilun/ashi": "^0.3.4",
     "@jcubic/lips": "1.0.0-beta.20"
   },
   "keywords": [

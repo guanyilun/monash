@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
 import type { AgentContext } from "agent-sh/types";
+import { STDLIB_CATALOG } from "./stdlib/index.ts";
 // LIPS 1.0's ESM build exposes named exports with no default; older builds (and
 // the CJS interop path) put everything under `default`. Accept both.
 import * as lipsNs from "@jcubic/lips";
@@ -188,14 +189,14 @@ export type LibrarySpec = {
   /** Optional longer instructions, surfaced only on `(load-library name)`. */
   doc?: string;
 };
-export type LibraryInfo = { name: string; description: string; count: number };
+export type LibraryInfo = { name: string; description: string; count: number; builtin: boolean };
 /** Handle returned by `defineLibrary`; define a library's primitives through it. */
 export interface Library {
   name: string;
   definePrimitive(spec: PrimitiveSpec): void;
 }
 type ExtPrimitiveRegistry = Map<string, { signature?: string; doc?: string; library: string }>;
-type LibraryRegistry = Map<string, { description: string; doc?: string; primitives: string[] }>;
+type LibraryRegistry = Map<string, { description: string; doc?: string; primitives: string[]; builtin?: boolean }>;
 const MISC_LIBRARY = "misc";
 
 function lipsToJs(v: any): any {
@@ -482,7 +483,7 @@ function createTimeoutController(): TimeoutController {
   };
 }
 
-async function evaluate(env: any, source: string, timeoutMs: number, ctl: TimeoutController = createTimeoutController()) {
+async function evaluate(env: any, source: string, timeoutMs: number, ctl: TimeoutController = createTimeoutController(), catalog?: Map<string, { library?: string }>) {
   const preprocessed = preprocessSchemeSource(source);
   bindKeywordSymbols(env, source);
   // Capture output into the result instead of letting it vanish to console.log.
@@ -525,6 +526,23 @@ async function evaluate(env: any, source: string, timeoutMs: number, ctl: Timeou
     } else if (msg.includes("Unbound variable `#\\")) {
       msg += "\n  Unknown character literal. Supported: #\\newline #\\space #\\tab" +
         " #\\return #\\null #\\delete #\\escape, #\\xNN, and #\\<char>.";
+    } else if (/Unbound variable `[^']+'/.test(msg)) {
+      const bad = msg.match(/Unbound variable `([^']+)'/)?.[1];
+      const hits = bad ? suggestNames(bad, environmentNames(env)) : [];
+      if (hits.length > 0) {
+        const labeled = hits.map((n) => {
+          const lib = catalog?.get(n)?.library;
+          return lib ? `${n} (in ${lib})` : n;
+        });
+        msg += `\n  Did you mean: ${labeled.join(", ")}?`;
+        if (hits.some((n) => catalog?.get(n)?.library)) {
+          msg += " — (load-library 'name) lists that library's full API.";
+        }
+      }
+    } else if (/Expecting .* got boolean/.test(msg)) {
+      msg += "\n  A boolean (almost always an unchecked #f) reached a slot needing a real value —" +
+        " usually a search/lookup that found nothing: string-index, string-contains, member, assoc," +
+        " find, hash-ref…. Guard it: (if v (… v …) fallback) or (or v default).";
     }
     return { ok: false as const, error: msg };
   } finally {
@@ -1317,16 +1335,7 @@ function installStdShims(env: any): void {
   defineIfMissing("unbox",    (b: any) => b instanceof LipsBox ? b.v : b);
   defineIfMissing("set-box!", (b: any, v: any) => { if (b instanceof LipsBox) b.v = v; return undefined; });
 
-  const collectEnvNames = (): string[] => {
-    const seen = new Set<string>();
-    let cur: any = env;
-    while (cur) {
-      const frame = cur.env;
-      if (frame && typeof frame === "object") for (const k of Object.keys(frame)) seen.add(k);
-      cur = cur.parent;
-    }
-    return Array.from(seen).sort();
-  };
+  const collectEnvNames = (): string[] => environmentNames(env).sort();
   defineIfMissing("defined?", (sym: any) => {
     const name = sym instanceof LSymbol ? symName(sym) : String(sym);
     return (env as any).get(name, { throwError: false }) !== undefined;
@@ -1460,7 +1469,85 @@ function auditShimCoverage(env: any): { defined: number; missing: string[] } {
   return { defined, missing };
 }
 
+// Every name bound anywhere up the env chain. Mirrors the in-Scheme apropos
+// walk; used for catalog audits and "did you mean" suggestions.
+function environmentNames(env: any): string[] {
+  const seen = new Set<string>();
+  let cur: any = env;
+  while (cur) {
+    const frame = cur.__env__;
+    if (frame && typeof frame === "object") for (const k of Object.keys(frame)) seen.add(k);
+    cur = cur.__parent__;
+  }
+  return [...seen];
+}
 
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+// Rank real names against a name that failed to resolve. Substring overlap
+// (the model spelled a longer/shorter variant) outranks edit-distance, which
+// is gated so unrelated names never surface.
+function suggestNames(target: string, names: string[], limit = 3): string[] {
+  const t = target.toLowerCase();
+  const scored: Array<{ name: string; score: number }> = [];
+  for (const name of names) {
+    const n = name.toLowerCase();
+    if (n === t) continue;
+    let score: number;
+    // Substring overlap only counts when the shared name is specific enough —
+    // otherwise "-" or "y" match nearly everything.
+    if (Math.min(n.length, t.length) >= 4 && (n.includes(t) || t.includes(n))) {
+      score = Math.abs(n.length - t.length);
+    } else {
+      const d = levenshtein(t, n);
+      if (d > Math.max(2, Math.floor(t.length / 3))) continue;
+      score = 100 + d;
+    }
+    scored.push({ name, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.name.length - b.name.length);
+  return scored.slice(0, limit).map((s) => s.name);
+}
+
+// Register the catalog into the shared library/primitive maps. Binding lives in
+// installStdShims; this only attaches metadata, so a catalogued-but-unbound name
+// is a doc bug, never a broken call — we log it rather than fail.
+function registerStdlibCatalog(
+  libraries: LibraryRegistry,
+  catalog: Map<string, { signature?: string; doc?: string; library: string }>,
+  env: any,
+): void {
+  const missing: string[] = [];
+  for (const lib of STDLIB_CATALOG) {
+    libraries.set(lib.name, {
+      description: lib.description,
+      doc: lib.doc,
+      primitives: lib.primitives.map((p) => p.name),
+      builtin: true,
+    });
+    for (const p of lib.primitives) {
+      catalog.set(p.name, { signature: p.signature, doc: p.doc, library: lib.name });
+      if ((env as any).get(p.name, { throwError: false }) === undefined) missing.push(p.name);
+    }
+  }
+  if (missing.length > 0) {
+    logErr("stdlib-catalog", new Error("catalogued names not bound"), { missing });
+  }
+}
 
 // Quoted alist literals like '((k . #t)) may carry #t/#f as LSymbol or as
 // the string "#t"/"#f". Normalize to JS bool.
@@ -1478,10 +1565,11 @@ function unwrapSchemeBool(v: any): any {
 
 type HostSig = { name: string; sig: string; ret: string; doc?: string };
 const HOST_SIGS: HostSig[] = [
-  { name: "bash", sig: '(bash "cmd" [:timeout sec])',
+  { name: "bash", sig: '(bash "cmd" [:timeout sec])', ret: "str",
+    doc: "run a shell command; stdout as a string" },
+  { name: "sh", sig: '(sh "cmd" [:timeout sec])',
     ret: "((output . str) (exit-code . n) (error . bool))",
     doc: "run a shell command; full result. Accessors: output-of exit-code-of ok? error?" },
-  { name: "sh", sig: '(sh "cmd" [:timeout sec])', ret: "str" },
   { name: "read-file", sig: '(read-file "path" [:offset n] [:limit n])', ret: "str | #f",
     doc: "file contents, or #f on error. :offset is 1-indexed; :limit caps lines" },
   { name: "write-file", sig: '(write-file "path" "content")', ret: "#t | err-str" },
@@ -1675,15 +1763,10 @@ function installBindings(
     const command = positionals[0];
     await runGuards("bash", [command]);
     try {
-      const r = await runBash(command, bashTimeout(positionals, opts));
-      return alist([
-        ["output",    r.output],
-        ["exit-code", r.exitCode],
-        ["error",     r.error],
-      ]);
+      return (await runBash(command, bashTimeout(positionals, opts))).output;
     } catch (e: any) {
-      logErr("bash", e, { command, typeofCommand: typeof command });
-      throw e;
+      logErr("bash", e, { command });
+      return "";
     }
   }));
   env.set("sh", withSig("sh", async (...rest: any[]) => {
@@ -1691,10 +1774,15 @@ function installBindings(
     const command = positionals[0];
     await runGuards("sh", [command]);
     try {
-      return (await runBash(command, bashTimeout(positionals, opts))).output;
+      const r = await runBash(command, bashTimeout(positionals, opts));
+      return alist([
+        ["output",    r.output],
+        ["exit-code", r.exitCode],
+        ["error",     r.error],
+      ]);
     } catch (e: any) {
-      logErr("sh", e, { command });
-      return "";
+      logErr("sh", e, { command, typeofCommand: typeof command });
+      throw e;
     }
   }));
 
@@ -1939,6 +2027,9 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
   const env = (lips as any).env.inherit("scheme-ext");
   const extPrims: ExtPrimitiveRegistry = new Map();
   const libraries: LibraryRegistry = new Map();
+  // Built-in stdlib signatures, kept apart from extPrims so `(help)` (which dumps
+  // extPrims) stays a host-primitive reference while these stay browsable per library.
+  const stdlibCatalog = new Map<string, { signature?: string; doc?: string; library: string }>();
   const loaded = new Set<string>();
   const guards: Guard[] = [];
   const timeoutCtl = createTimeoutController();
@@ -1983,6 +2074,7 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
     try {
       installStdShims(env);
       await (lips as any).exec(PRELUDE, { env });
+      registerStdlibCatalog(libraries, stdlibCatalog, env);
       const audit = auditShimCoverage(env);
       if (audit.missing.length > 0) {
         logErr("shim-audit", new Error("missing canonical names"), {
@@ -2048,6 +2140,7 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
       ["name", name],
       ["description", l.description],
       ["count", l.primitives.length],
+      ["builtin", !!l.builtin],
       ["loaded", loaded.has(name)],
     ])),
   ));
@@ -2057,11 +2150,12 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
     if (!lib) return `no library named ${key}; (libraries) lists them`;
     loaded.add(key);
     const sigs = lib.primitives.map((pn) => {
-      const m = extPrims.get(pn);
+      const m = stdlibCatalog.get(pn) ?? extPrims.get(pn);
       const sig = m?.signature ?? `(${pn} …)`;
       return m?.doc ? `${sig}\n    ${m.doc}` : sig;
     }).join("\n");
-    const header = `## ${key}${lib.description ? ` — ${lib.description}` : ""}`;
+    const origin = lib.builtin ? " · standard library (always available)" : " · extension";
+    const header = `## ${key}${lib.description ? ` — ${lib.description}` : ""}${origin}`;
     const body = sigs || "(no primitives)";
     return lib.doc ? `${header}\n${lib.doc}\n\n${body}` : `${header}\n${body}`;
   });
@@ -2103,12 +2197,12 @@ export function createInterpreter(ctx: AgentContext): Interpreter {
     evaluate: async (source, timeoutMs) => {
       await ready;
       if (!bindingBaseline) bindingBaseline = new Set(ownKeys());
-      return evaluate(env, source, timeoutMs, timeoutCtl);
+      return evaluate(env, source, timeoutMs, timeoutCtl, stdlibCatalog);
     },
     definePrimitive,
     defineLibrary,
     listPrimitives: () => [...extPrims].map(([name, m]) => ({ name, signature: m.signature, doc: m.doc })),
-    listLibraries: () => [...libraries].map(([name, l]) => ({ name, description: l.description, count: l.primitives.length })),
+    listLibraries: () => [...libraries].map(([name, l]) => ({ name, description: l.description, count: l.primitives.length, builtin: !!l.builtin })),
     listBindings: listUserBindings,
     addGuard: (guard) => {
       guards.push(guard);
